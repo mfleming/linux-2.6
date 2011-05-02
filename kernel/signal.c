@@ -1174,13 +1174,19 @@ specific_send_sig_info(int sig, struct siginfo *info, struct task_struct *t)
 int do_send_sig_info(int sig, struct siginfo *info, struct task_struct *p,
 			bool group)
 {
+	struct sighand_struct *sighand;
 	unsigned long flags;
 	int ret = -ESRCH;
 
-	if (lock_task_sighand(p, &flags)) {
-		ret = send_signal(sig, info, p, group);
-		unlock_task_sighand(p, &flags);
-	}
+	sighand = get_sighand(p, &flags);
+	if (!sighand)
+		return ret;
+
+	spin_lock(&p->sighand->siglock);
+	ret = send_signal(sig, info, p, group);
+	spin_unlock(&p->sighand->siglock);
+
+	put_sighand(p, &flags);
 
 	return ret;
 }
@@ -1251,25 +1257,9 @@ struct sighand_struct *__lock_task_sighand(struct task_struct *tsk,
 {
 	struct sighand_struct *sighand;
 
-	for (;;) {
-		local_irq_save(*flags);
-		rcu_read_lock();
-		sighand = rcu_dereference(tsk->sighand);
-		if (unlikely(sighand == NULL)) {
-			rcu_read_unlock();
-			local_irq_restore(*flags);
-			break;
-		}
-
+	sighand = get_sighand(tsk, flags);
+	if (sighand)
 		spin_lock(&sighand->siglock);
-		if (likely(sighand == tsk->sighand)) {
-			rcu_read_unlock();
-			break;
-		}
-		spin_unlock(&sighand->siglock);
-		rcu_read_unlock();
-		local_irq_restore(*flags);
-	}
 
 	return sighand;
 }
@@ -1374,11 +1364,19 @@ int kill_pid_info_as_uid(int sig, struct siginfo *info, struct pid *pid,
 		goto out_unlock;
 
 	if (sig) {
-		if (lock_task_sighand(p, &flags)) {
-			ret = __send_signal(sig, info, p, 1, 0);
-			unlock_task_sighand(p, &flags);
-		} else
+		struct sighand_struct *sighand;
+
+		sighand = get_sighand(p, &flags);
+		if (!sighand) {
 			ret = -ESRCH;
+			goto out_unlock;
+		}
+
+		spin_lock(&p->sighand->siglock);
+		ret = __send_signal(sig, info, p, 1, 0);
+		spin_unlock(&p->sighand->siglock);
+
+		put_sighand(p, &flags);
 	}
 out_unlock:
 	rcu_read_unlock();
@@ -1543,6 +1541,7 @@ void sigqueue_free(struct sigqueue *q)
 int send_sigqueue(struct sigqueue *q, struct task_struct *t, int group)
 {
 	int sig = q->info.si_signo;
+	struct sighand_struct *sighand;
 	struct sigpending *pending;
 	unsigned long flags;
 	int ret;
@@ -1550,9 +1549,11 @@ int send_sigqueue(struct sigqueue *q, struct task_struct *t, int group)
 	BUG_ON(!(q->flags & SIGQUEUE_PREALLOC));
 
 	ret = -1;
-	if (!likely(lock_task_sighand(t, &flags)))
+	sighand = get_sighand(t, &flags);
+	if (!sighand)
 		goto ret;
 
+	spin_lock(&t->sighand->siglock);
 	ret = 1; /* the signal is ignored */
 	if (!prepare_signal(sig, t, 0))
 		goto out;
@@ -1575,7 +1576,8 @@ int send_sigqueue(struct sigqueue *q, struct task_struct *t, int group)
 	sigaddset(&pending->signal, sig);
 	complete_signal(sig, t, group);
 out:
-	unlock_task_sighand(t, &flags);
+	spin_unlock(&t->sighand->siglock);
+	put_sighand(t, &flags);
 ret:
 	return ret;
 }
@@ -2779,8 +2781,8 @@ do_send_specific(pid_t tgid, pid_t pid, int sig, struct siginfo *info)
 		if (!error && sig) {
 			error = do_send_sig_info(sig, info, p, false);
 			/*
-			 * If lock_task_sighand() failed we pretend the task
-			 * dies after receiving the signal. The window is tiny,
+			 * If get_sighand() failed we pretend the task dies
+			 * after receiving the signal. The window is tiny,
 			 * and the signal is private anyway.
 			 */
 			if (unlikely(error == -ESRCH))

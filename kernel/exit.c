@@ -84,6 +84,9 @@ static void __exit_signal(struct task_struct *tsk)
 	struct sighand_struct *sighand;
 	struct tty_struct *uninitialized_var(tty);
 
+	/* Make sure no one is dereferencing tsk->sighand */
+	spin_lock(&tsk->sighand_lock);
+
 	sighand = rcu_dereference_check(tsk->sighand,
 					lockdep_tasklist_lock_is_held());
 	spin_lock(&sighand->siglock);
@@ -144,6 +147,7 @@ static void __exit_signal(struct task_struct *tsk)
 	flush_sigqueue(&tsk->pending);
 	tsk->sighand = NULL;
 	spin_unlock(&sighand->siglock);
+	spin_unlock(&tsk->sighand_lock);
 
 	__cleanup_sighand(sighand);
 	clear_tsk_thread_flag(tsk,TIF_SIGPENDING);

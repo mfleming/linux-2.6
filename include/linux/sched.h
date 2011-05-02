@@ -1390,6 +1390,18 @@ struct task_struct {
 	struct signal_struct *signal;
 	struct sighand_struct *sighand;
 
+	/*
+	 * sighand_lock is a short-term lock that is used when
+	 * dereferencing our 'sighand' pointer. We can only change
+	 * where 'sighand' points while holding this lock. It also
+	 * allows other tasks to prevent us from modifying our
+	 * 'sighand' pointer because they're dereferencing the
+	 * sighand_struct that 'sighand' points to.
+	 *
+	 * See get_sighand() and put_sighand().
+	 */
+	spinlock_t sighand_lock;
+
 	sigset_t blocked, real_blocked;
 	sigset_t saved_sigmask;	/* restored if set_restore_sigmask() was used */
 	struct sigpending pending;
@@ -2349,6 +2361,57 @@ static inline void task_unlock(struct task_struct *p)
 	spin_unlock(&p->alloc_lock);
 }
 
+/**
+ * get_sighand - Get a reference on a sighand
+ * @tsk: Target task
+ *
+ * Acquire a short-term reference on @tsk's sighand.
+ *
+ * A short-term reference stops @tsk's sighand from being changed
+ * under us. Without it, it's possible for @tsk to change its sighand,
+ * possibly even setting it to %NULL. For this reason a short-term
+ * reference is needed if acquiring @tsk->sighand->siglock, because
+ * holding the reference ensures that we lock the correct lock! (see
+ * de_thread())
+ *
+ * In essence, calling get_sighand() makes tsk->sighand safe to
+ * dereference (provided it doesn't return %NULL, of course).
+ *
+ * We must be called with either tasklist_lock at least held for
+ * reading or we must have already called get_task_struct() on @tsk
+ * and be in an rcu read-side section.
+ *
+ * Return %NULL if @tsk is dying and hence we cannot obtain a
+ * reference to its sighand. Otherwise we return a pointer to @tsk's
+ * sighand and return with interrupts disabled.
+ */
+static inline struct sighand_struct *get_sighand(struct task_struct *tsk,
+						 unsigned long *irqflags)
+{
+	/*
+	 * Protect the pointer at tsk->sighand from being modified,
+	 * but not the sighand_struct that it points to!
+	 */
+	spin_lock_irqsave(&tsk->sighand_lock, *irqflags);
+	if (!tsk->sighand)
+		spin_unlock_irqrestore(&tsk->sighand_lock, *irqflags);
+
+	return tsk->sighand;
+}
+
+/**
+ * put_sighand - Release a reference on @tsk's sighand
+ * @tsk: Target task
+ *
+ * Release a short-term reference on @tsk's sighand that was acquired
+ * with get_sighand().
+ */
+static inline void put_sighand(struct task_struct *tsk,
+			       unsigned long *flags)
+{
+	spin_unlock_irqrestore(&tsk->sighand_lock, *flags);
+}
+
 extern struct sighand_struct *__lock_task_sighand(struct task_struct *tsk,
 							unsigned long *flags);
 
@@ -2362,7 +2425,8 @@ extern struct sighand_struct *__lock_task_sighand(struct task_struct *tsk,
 static inline void unlock_task_sighand(struct task_struct *tsk,
 						unsigned long *flags)
 {
-	spin_unlock_irqrestore(&tsk->sighand->siglock, *flags);
+	spin_unlock(&tsk->sighand->siglock);
+	put_sighand(tsk, flags);
 }
 
 /* See the declaration of threadgroup_fork_lock in signal_struct. */

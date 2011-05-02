@@ -168,6 +168,7 @@ extern struct cred init_cred;
 	.files		= &init_files,					\
 	.signal		= &init_signals,				\
 	.sighand	= &init_sighand,				\
+	.sighand_lock	= __SPIN_LOCK_UNLOCKED(tsk.sighand_lock),	\
 	.nsproxy	= &init_nsproxy,				\
 	.pending	= {						\
 		.list = LIST_HEAD_INIT(tsk.pending.list),		\

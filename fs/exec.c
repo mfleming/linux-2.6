@@ -998,9 +998,12 @@ no_thread_group:
 		       sizeof(newsighand->action));
 
 		write_lock_irq(&tasklist_lock);
-		spin_lock(&oldsighand->siglock);
+
+		/* Make sure no one is dereferencing tsk->sighand */
+		spin_lock(&tsk->sighand_lock);
+
 		rcu_assign_pointer(tsk->sighand, newsighand);
-		spin_unlock(&oldsighand->siglock);
+		spin_unlock(&tsk->sighand_lock);
 		write_unlock_irq(&tasklist_lock);
 
 		__cleanup_sighand(oldsighand);
