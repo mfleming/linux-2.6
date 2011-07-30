@@ -311,9 +311,9 @@ force_sigsegv_info (int sig, void __user *addr)
 		 * no longer safe to modify sa_handler without holding the
 		 * lock.
 		 */
-		spin_lock_irqsave(&current->sighand->siglock, flags);
+		write_lock_irqsave(&current->sighand->action_lock, flags);
 		current->sighand->action[sig - 1].sa.sa_handler = SIG_DFL;
-		spin_unlock_irqrestore(&current->sighand->siglock, flags);
+		write_unlock_irqrestore(&current->sighand->action_lock, flags);
 	}
 	si.si_signo = SIGSEGV;
 	si.si_errno = 0;

@@ -350,10 +350,10 @@ static int ptrace_traceme(void)
 static int ignoring_children(struct sighand_struct *sigh)
 {
 	int ret;
-	spin_lock(&sigh->siglock);
+	read_lock(&sigh->action_lock);
 	ret = (sigh->action[SIGCHLD-1].sa.sa_handler == SIG_IGN) ||
 	      (sigh->action[SIGCHLD-1].sa.sa_flags & SA_NOCLDWAIT);
-	spin_unlock(&sigh->siglock);
+	read_unlock(&sigh->action_lock);
 	return ret;
 }
 

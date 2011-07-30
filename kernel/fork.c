@@ -1588,6 +1588,7 @@ static void sighand_ctor(void *data)
 
 	spin_lock_init(&sighand->siglock);
 	init_waitqueue_head(&sighand->signalfd_wqh);
+	rwlock_init(&sighand->action_lock);
 }
 
 void __init proc_caches_init(void)

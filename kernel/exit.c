@@ -380,7 +380,10 @@ int allow_signal(int sig)
 	 * know it'll be handled, so that they don't get converted to
 	 * SIGKILL or just silently dropped.
 	 */
+	write_lock(&current->sighand->action_lock);
 	current->sighand->action[(sig)-1].sa.sa_handler = (void __user *)2;
+	write_unlock(&current->sighand->action_lock);
+
 	recalc_sigpending();
 	spin_unlock_irq(&current->sighand->siglock);
 	return 0;
@@ -394,7 +397,10 @@ int disallow_signal(int sig)
 		return -EINVAL;
 
 	spin_lock_irq(&current->sighand->siglock);
+	write_lock(&current->sighand->action_lock);
 	current->sighand->action[(sig)-1].sa.sa_handler = SIG_IGN;
+	write_unlock(&current->sighand->action_lock);
+
 	recalc_sigpending();
 	spin_unlock_irq(&current->sighand->siglock);
 	return 0;
