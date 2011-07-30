@@ -443,6 +443,7 @@ struct sighand_struct {
 	struct k_sigaction	action[_NSIG];
 	spinlock_t		siglock;
 	wait_queue_head_t	signalfd_wqh;
+	rwlock_t		action_lock;
 };
 
 struct pacct_struct {

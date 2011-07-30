@@ -56,6 +56,7 @@ extern struct nsproxy init_nsproxy;
 	.action		= { { { .sa_handler = SIG_DFL, } }, },		\
 	.siglock	= __SPIN_LOCK_UNLOCKED(sighand.siglock),	\
 	.signalfd_wqh	= __WAIT_QUEUE_HEAD_INITIALIZER(sighand.signalfd_wqh),	\
+	.action_lock	= __RW_LOCK_UNLOCKED(sighand.action_lock),	\
 }
 
 extern struct group_info init_groups;

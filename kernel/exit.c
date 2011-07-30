@@ -377,6 +377,8 @@ int allow_signal(int sig)
 		return -EINVAL;
 
 	spin_lock_irq(&current->sighand->siglock);
+	write_lock(&current->sighand->action_lock);
+
 	/* This is only needed for daemonize()'ed kthreads */
 	sigdelset(&current->blocked, sig);
 	/*
@@ -386,6 +388,8 @@ int allow_signal(int sig)
 	 */
 	current->sighand->action[(sig)-1].sa.sa_handler = (void __user *)2;
 	recalc_sigpending();
+
+	write_unlock(&current->sighand->action_lock);
 	spin_unlock_irq(&current->sighand->siglock);
 	return 0;
 }
@@ -398,8 +402,12 @@ int disallow_signal(int sig)
 		return -EINVAL;
 
 	spin_lock_irq(&current->sighand->siglock);
+	write_lock(&current->sighand->action_lock);
+
 	current->sighand->action[(sig)-1].sa.sa_handler = SIG_IGN;
 	recalc_sigpending();
+
+	write_unlock(&current->sighand->action_lock);
 	spin_unlock_irq(&current->sighand->siglock);
 	return 0;
 }

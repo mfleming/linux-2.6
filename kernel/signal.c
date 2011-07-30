@@ -45,6 +45,10 @@ static struct kmem_cache *sigqueue_cachep;
 
 int print_fatal_signals __read_mostly;
 
+/*
+ * Must be called with t->sighand->action_lock at least held for
+ * reading.
+ */
 static void __user *sig_handler(struct task_struct *t, int sig)
 {
 	return t->sighand->action[sig - 1].sa.sa_handler;
@@ -458,6 +462,9 @@ void flush_itimer_signals(void)
 	spin_unlock_irqrestore(&tsk->sighand->siglock, flags);
 }
 
+/*
+ * Must be called with t->sighand->action_lock held for writing.
+ */
 void ignore_signals(struct task_struct *t)
 {
 	int i;
@@ -470,8 +477,9 @@ void ignore_signals(struct task_struct *t)
 
 /*
  * Flush all handlers for a task.
+ *
+ * Must be called with t->sighand->action_lock write-locked.
  */
-
 void
 flush_signal_handlers(struct task_struct *t, int force_default)
 {
@@ -1117,13 +1125,18 @@ static int send_signal(int sig, struct siginfo *info, struct task_struct *t,
 			int group)
 {
 	int from_ancestor_ns = 0;
+	int ret;
 
 #ifdef CONFIG_PID_NS
 	from_ancestor_ns = si_fromuser(info) &&
 			   !task_pid_nr_ns(current, task_active_pid_ns(t));
 #endif
 
-	return __send_signal(sig, info, t, group, from_ancestor_ns);
+	read_lock(&t->sighand->action_lock);
+	ret = __send_signal(sig, info, t, group, from_ancestor_ns);
+	read_unlock(&t->sighand->action_lock);
+
+	return ret;
 }
 
 static void print_fatal_signal(struct pt_regs *regs, int signr)
@@ -1210,6 +1223,7 @@ force_sig_info(int sig, struct siginfo *info, struct task_struct *t)
 	struct k_sigaction *action;
 
 	spin_lock_irqsave(&t->sighand->siglock, flags);
+	write_lock(&t->sighand->action_lock);
 	action = &t->sighand->action[sig-1];
 	ignored = action->sa.sa_handler == SIG_IGN;
 	blocked = sigismember(&t->blocked, sig);
@@ -1223,6 +1237,7 @@ force_sig_info(int sig, struct siginfo *info, struct task_struct *t)
 	if (action->sa.sa_handler == SIG_DFL)
 		t->signal->flags &= ~SIGNAL_UNKILLABLE;
 	ret = specific_send_sig_info(sig, info, t);
+	write_unlock(&t->sighand->action_lock);
 	spin_unlock_irqrestore(&t->sighand->siglock, flags);
 
 	return ret;
@@ -1373,7 +1388,9 @@ int kill_pid_info_as_uid(int sig, struct siginfo *info, struct pid *pid,
 		}
 
 		spin_lock(&p->sighand->siglock);
+		read_lock(&p->sighand->action_lock);
 		ret = __send_signal(sig, info, p, 1, 0);
+		read_unlock(&p->sighand->action_lock);
 		spin_unlock(&p->sighand->siglock);
 
 		put_sighand(p, &flags);
@@ -1469,7 +1486,9 @@ force_sigsegv(int sig, struct task_struct *p)
 	if (sig == SIGSEGV) {
 		unsigned long flags;
 		spin_lock_irqsave(&p->sighand->siglock, flags);
+		write_lock(&p->sighand->action_lock);
 		p->sighand->action[sig - 1].sa.sa_handler = SIG_DFL;
+		write_unlock(&p->sighand->action_lock);
 		spin_unlock_irqrestore(&p->sighand->siglock, flags);
 	}
 	force_sig(SIGSEGV, p);
@@ -1640,6 +1659,7 @@ bool do_notify_parent(struct task_struct *tsk, int sig)
 
 	psig = tsk->parent->sighand;
 	spin_lock_irqsave(&psig->siglock, flags);
+	read_lock(&psig->action_lock);
 	if (!tsk->ptrace && sig == SIGCHLD &&
 	    (psig->action[SIGCHLD-1].sa.sa_handler == SIG_IGN ||
 	     (psig->action[SIGCHLD-1].sa.sa_flags & SA_NOCLDWAIT))) {
@@ -1665,6 +1685,7 @@ bool do_notify_parent(struct task_struct *tsk, int sig)
 	if (valid_signal(sig) && sig)
 		__group_send_sig_info(sig, &info, tsk->parent);
 	__wake_up_parent(tsk, tsk->parent);
+	read_unlock(&psig->action_lock);
 	spin_unlock_irqrestore(&psig->siglock, flags);
 
 	return autoreap;
@@ -1728,6 +1749,7 @@ static void do_notify_parent_cldstop(struct task_struct *tsk,
 
 	sighand = parent->sighand;
 	spin_lock_irqsave(&sighand->siglock, flags);
+	read_lock(&sighand->action_lock);
 	if (sighand->action[SIGCHLD-1].sa.sa_handler != SIG_IGN &&
 	    !(sighand->action[SIGCHLD-1].sa.sa_flags & SA_NOCLDSTOP))
 		__group_send_sig_info(SIGCHLD, &info, parent);
@@ -1735,6 +1757,7 @@ static void do_notify_parent_cldstop(struct task_struct *tsk,
 	 * Even if SIGCHLD is not generated, we must wake up wait4 calls.
 	 */
 	__wake_up_parent(tsk, parent);
+	read_unlock(&sighand->action_lock);
 	spin_unlock_irqrestore(&sighand->siglock, flags);
 }
 
@@ -2214,13 +2237,17 @@ relock:
 				continue;
 		}
 
+		read_lock(&sighand->action_lock);
 		ka = &sighand->action[signr-1];
 
 		/* Trace actually delivered signals. */
 		trace_signal_deliver(signr, info, ka);
 
-		if (ka->sa.sa_handler == SIG_IGN) /* Do nothing.  */
+		if (ka->sa.sa_handler == SIG_IGN) { /* Do nothing.  */
+			read_unlock(&sighand->action_lock);
 			continue;
+		}
+
 		if (ka->sa.sa_handler != SIG_DFL) {
 			/* Run the handler.  */
 			*return_ka = *ka;
@@ -2228,14 +2255,19 @@ relock:
 			if (ka->sa.sa_flags & SA_ONESHOT)
 				ka->sa.sa_handler = SIG_DFL;
 
+			read_unlock(&sighand->action_lock);
 			break; /* will return non-zero "signr" value */
 		}
 
 		/*
 		 * Now we are doing the default action for this signal.
 		 */
-		if (sig_kernel_ignore(signr)) /* Default is nothing. */
+		if (sig_kernel_ignore(signr)) { /* Default is nothing. */
+			read_unlock(&sighand->action_lock);
 			continue;
+		}
+
+		read_unlock(&sighand->action_lock);
 
 		/*
 		 * Global init gets no signals it doesn't want.
@@ -2909,9 +2941,11 @@ int do_sigaction(int sig, struct k_sigaction *act, struct k_sigaction *oact)
 	if (!valid_signal(sig) || sig < 1 || (act && sig_kernel_only(sig)))
 		return -EINVAL;
 
+	spin_lock_irq(&current->sighand->siglock);
+	read_lock(&current->sighand->action_lock);
+
 	k = &t->sighand->action[sig-1];
 
-	spin_lock_irq(&current->sighand->siglock);
 	if (oact)
 		*oact = *k;
 
@@ -2941,6 +2975,7 @@ int do_sigaction(int sig, struct k_sigaction *act, struct k_sigaction *oact)
 		}
 	}
 
+	read_unlock(&current->sighand->action_lock);
 	spin_unlock_irq(&current->sighand->siglock);
 	return 0;
 }

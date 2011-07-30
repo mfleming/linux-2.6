@@ -143,9 +143,9 @@ static int ____call_usermodehelper(void *data)
 	struct cred *new;
 	int retval;
 
-	spin_lock_irq(&current->sighand->siglock);
+	write_lock_irq(&current->sighand->action_lock);
 	flush_signal_handlers(current, 1);
-	spin_unlock_irq(&current->sighand->siglock);
+	write_unlock_irq(&current->sighand->action_lock);
 
 	/* We can run anywhere, unlike our parent keventd(). */
 	set_cpus_allowed_ptr(current, cpu_all_mask);
@@ -203,7 +203,9 @@ static int wait_for_helper(void *data)
 
 	/* If SIGCLD is ignored sys_wait4 won't populate the status. */
 	spin_lock_irq(&current->sighand->siglock);
+	write_lock(&current->sighand->action_lock);
 	current->sighand->action[SIGCHLD-1].sa.sa_handler = SIG_DFL;
+	write_unlock(&current->sighand->action_lock);
 	spin_unlock_irq(&current->sighand->siglock);
 
 	pid = kernel_thread(____call_usermodehelper, sub_info, SIGCHLD);
