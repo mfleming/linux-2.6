@@ -1405,6 +1405,7 @@ struct task_struct {
 
 	sigset_t blocked, real_blocked;
 	sigset_t saved_sigmask;	/* restored if set_restore_sigmask() was used */
+	spinlock_t siglock;	/* protects pending */
 	struct sigpending pending;
 
 	unsigned long sas_ss_sp;

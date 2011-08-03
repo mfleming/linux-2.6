@@ -1139,6 +1139,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 
 	init_sigpending(&p->pending);
 	spin_lock_init(&p->sighand_lock);
+	spin_lock_init(&p->siglock);
 
 	p->utime = cputime_zero;
 	p->stime = cputime_zero;
@@ -1328,6 +1329,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	}
 
 	spin_lock(&current->sighand->siglock);
+	spin_lock(&current->siglock);
 
 	/*
 	 * Process group and session signals need to be delivered to just the
@@ -1338,6 +1340,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	 * thread can't slip out of an OOM kill (or normal SIGKILL).
 	*/
 	recalc_sigpending();
+	spin_unlock(&current->siglock);
 	if (signal_pending(current)) {
 		spin_unlock(&current->sighand->siglock);
 		write_unlock_irq(&tasklist_lock);
