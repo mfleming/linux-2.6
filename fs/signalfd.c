@@ -145,6 +145,7 @@ static ssize_t signalfd_dequeue(struct signalfd_ctx *ctx, siginfo_t *info,
 	DECLARE_WAITQUEUE(wait, current);
 
 	spin_lock_irq(&current->sighand->siglock);
+	spin_lock(&current->siglock);
 	ret = dequeue_signal(current, &ctx->sigmask, info);
 	switch (ret) {
 	case 0:

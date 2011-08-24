@@ -128,6 +128,8 @@ static inline int has_pending_signals(sigset_t *signal, sigset_t *blocked)
 
 static int recalc_sigpending_tsk(struct task_struct *t)
 {
+	assert_spin_locked(&t->sighand->siglock);
+	assert_spin_locked(&t->siglock);
 	if ((t->jobctl & JOBCTL_PENDING_MASK) ||
 	    PENDING(&t->pending, &t->blocked) ||
 	    PENDING(&t->signal->shared_pending, &t->blocked)) {
@@ -534,9 +536,11 @@ unblock_all_signals(void)
 	unsigned long flags;
 
 	spin_lock_irqsave(&current->sighand->siglock, flags);
+	spin_lock(&current->siglock);
 	current->notifier = NULL;
 	current->notifier_data = NULL;
 	recalc_sigpending();
+	spin_unlock(&current->siglock);
 	spin_unlock_irqrestore(&current->sighand->siglock, flags);
 }
 
@@ -601,8 +605,6 @@ static int __dequeue_signal(struct sigpending *pending, sigset_t *mask,
 /*
  * Dequeue a signal and return the element to the caller, which is
  * expected to free it.
- *
- * All callers have to hold the siglock.
  */
 int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 {
@@ -611,8 +613,12 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 	/* We only dequeue private signals from ourselves, we don't let
 	 * signalfd steal them
 	 */
+	spin_lock_irq(&tsk->siglock);
 	signr = __dequeue_signal(&tsk->pending, mask, info);
 	if (!signr) {
+		spin_unlock_irq(&tsk->siglock);
+
+		spin_lock_irq(&tsk->sighand->siglock);
 		signr = __dequeue_signal(&tsk->signal->shared_pending,
 					 mask, info);
 		/*
@@ -642,7 +648,7 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 
 	recalc_sigpending();
 	if (!signr)
-		return 0;
+		goto out;
 
 	if (unlikely(sig_kernel_stop(signr))) {
 		/*
@@ -670,6 +676,8 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 		do_schedule_next_timer(info);
 		spin_lock(&tsk->sighand->siglock);
 	}
+out:
+	spin_unlock_irq(&tsk->sighand->siglock);
 	return signr;
 }
 
@@ -1223,6 +1231,7 @@ force_sig_info(int sig, struct siginfo *info, struct task_struct *t)
 	struct k_sigaction *action;
 
 	spin_lock_irqsave(&t->sighand->siglock, flags);
+	spin_lock(&t->siglock);
 	write_lock(&t->sighand->action_lock);
 	action = &t->sighand->action[sig-1];
 	ignored = action->sa.sa_handler == SIG_IGN;
@@ -1238,6 +1247,7 @@ force_sig_info(int sig, struct siginfo *info, struct task_struct *t)
 		t->signal->flags &= ~SIGNAL_UNKILLABLE;
 	ret = specific_send_sig_info(sig, info, t);
 	write_unlock(&t->sighand->action_lock);
+	spin_unlock(&t->siglock);
 	spin_unlock_irqrestore(&t->sighand->siglock, flags);
 
 	return ret;
@@ -2175,22 +2185,27 @@ relock:
 	 */
 	try_to_freeze();
 
-	spin_lock_irq(&sighand->siglock);
 	/*
 	 * Every stopped thread goes here after wakeup. Check to see if
 	 * we should notify the parent, prepare_signal(SIGCONT) encodes
 	 * the CLD_ si_code into SIGNAL_CLD_MASK bits.
+	 *
+	 * We try really hard not to take the shared siglock unless
+	 * absolutely ncessary as it's a major point of contention in
+	 * multi-threaded applications.
 	 */
 	if (unlikely(signal->flags & SIGNAL_CLD_MASK)) {
 		int why;
 
-		if (signal->flags & SIGNAL_CLD_CONTINUED)
-			why = CLD_CONTINUED;
-		else
-			why = CLD_STOPPED;
+		spin_lock_irq(&sighand->siglock);
+		if (signal->flags & SIGNAL_CLD_MASK) {
+			if (signal->flags & SIGNAL_CLD_CONTINUED)
+				why = CLD_CONTINUED;
+			else
+				why = CLD_STOPPED;
 
-		signal->flags &= ~SIGNAL_CLD_MASK;
-
+			signal->flags &= ~SIGNAL_CLD_MASK;
+		}
 		spin_unlock_irq(&sighand->siglock);
 
 		/*
@@ -2214,15 +2229,21 @@ relock:
 
 	for (;;) {
 		struct k_sigaction *ka;
+		unsigned int jobctl;
 
-		if (unlikely(current->jobctl & JOBCTL_STOP_PENDING) &&
-		    do_signal_stop(0))
-			goto relock;
+		jobctl = current->jobctl;
 
-		if (unlikely(current->jobctl & JOBCTL_TRAP_MASK)) {
-			do_jobctl_trap();
-			spin_unlock_irq(&sighand->siglock);
-			goto relock;
+		if (unlikely(jobctl & (JOBCTL_STOP_PENDING|JOBCTL_TRAP_MASK))) {
+			spin_lock_irq(&sighand->siglock);
+			if ((current->jobctl & JOBCTL_STOP_PENDING) &&
+			    do_signal_stop(0))
+				goto relock;
+
+			if (current->jobctl & JOBCTL_TRAP_MASK) {
+				do_jobctl_trap();
+				spin_unlock_irq(&sighand->siglock);
+				goto relock;
+			}
 		}
 
 		signr = dequeue_signal(current, &current->blocked, info);

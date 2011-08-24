@@ -122,7 +122,7 @@ static int jffs2_garbage_collect_thread(void *_c)
 			if (try_to_freeze())
 				goto again;
 
-			signr = dequeue_signal_lock(current, &current->blocked, &info);
+			signr = dequeue_signal(current, &current->blocked, &info);
 
 			switch(signr) {
 			case SIGSTOP:

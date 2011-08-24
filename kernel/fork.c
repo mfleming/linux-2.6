@@ -1340,13 +1340,14 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	 * thread can't slip out of an OOM kill (or normal SIGKILL).
 	*/
 	recalc_sigpending();
-	spin_unlock(&current->siglock);
 	if (signal_pending(current)) {
+		spin_unlock(&current->siglock);
 		spin_unlock(&current->sighand->siglock);
 		write_unlock_irq(&tasklist_lock);
 		retval = -ERESTARTNOINTR;
 		goto bad_fork_free_pid;
 	}
+	spin_unlock(&current->siglock);
 
 	if (clone_flags & CLONE_THREAD) {
 		current->signal->nr_threads++;

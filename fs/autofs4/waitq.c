@@ -83,8 +83,10 @@ static int autofs4_write(struct file *file, const void *addr, int bytes)
 	   SIGPIPE unless it was already supposed to get one */
 	if (wr == -EPIPE && !sigpipe) {
 		spin_lock_irqsave(&current->sighand->siglock, flags);
+		spin_lock(&current->siglock);
 		sigdelset(&current->pending.signal, SIGPIPE);
 		recalc_sigpending();
+		spin_unlock(&current->siglock);
 		spin_unlock_irqrestore(&current->sighand->siglock, flags);
 	}
 

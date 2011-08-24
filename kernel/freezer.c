@@ -41,7 +41,9 @@ void refrigerator(void)
 	pr_debug("%s entered refrigerator\n", current->comm);
 
 	spin_lock_irq(&current->sighand->siglock);
+	spin_lock(&current->siglock);
 	recalc_sigpending(); /* We sent fake signal, clean it up */
+	spin_unlock(&current->siglock);
 	spin_unlock_irq(&current->sighand->siglock);
 
 	/* prevent accounting of that task to load */
@@ -128,7 +130,9 @@ void cancel_freezing(struct task_struct *p)
 		pr_debug("  clean up: %s\n", p->comm);
 		clear_freeze_flag(p);
 		spin_lock_irqsave(&p->sighand->siglock, flags);
+		spin_lock(&p->siglock);
 		recalc_sigpending_and_wake(p);
+		spin_unlock(&p->siglock);
 		spin_unlock_irqrestore(&p->sighand->siglock, flags);
 	}
 }
