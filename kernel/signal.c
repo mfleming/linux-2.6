@@ -2191,7 +2191,7 @@ relock:
 	 * the CLD_ si_code into SIGNAL_CLD_MASK bits.
 	 *
 	 * We try really hard not to take the shared siglock unless
-	 * absolutely ncessary as it's a major point of contention in
+	 * absolutely necessary as it's a major point of contention in
 	 * multi-threaded applications.
 	 */
 	if (unlikely(signal->flags & SIGNAL_CLD_MASK)) {
@@ -2205,26 +2205,29 @@ relock:
 				why = CLD_STOPPED;
 
 			signal->flags &= ~SIGNAL_CLD_MASK;
+
+			spin_unlock_irq(&sighand->siglock);
+
+			/*
+			 * Notify the parent that we're continuing.
+			 * This event is always per-process and
+			 * doesn't make whole lot of sense for
+			 * ptracers, who shouldn't consume the state
+			 * via wait(2) either, but, for backward
+			 * compatibility, notify the ptracer of the
+			 * group leader too unless it's gonna be a
+			 * duplicate.
+			 */
+			read_lock(&tasklist_lock);
+			do_notify_parent_cldstop(current, false, why);
+
+			if (ptrace_reparented(current->group_leader))
+				do_notify_parent_cldstop(current->group_leader,
+							 true, why);
+			read_unlock(&tasklist_lock);
+
+			goto relock;
 		}
-		spin_unlock_irq(&sighand->siglock);
-
-		/*
-		 * Notify the parent that we're continuing.  This event is
-		 * always per-process and doesn't make whole lot of sense
-		 * for ptracers, who shouldn't consume the state via
-		 * wait(2) either, but, for backward compatibility, notify
-		 * the ptracer of the group leader too unless it's gonna be
-		 * a duplicate.
-		 */
-		read_lock(&tasklist_lock);
-		do_notify_parent_cldstop(current, false, why);
-
-		if (ptrace_reparented(current->group_leader))
-			do_notify_parent_cldstop(current->group_leader,
-						true, why);
-		read_unlock(&tasklist_lock);
-
-		goto relock;
 	}
 
 	for (;;) {
@@ -2244,6 +2247,8 @@ relock:
 				spin_unlock_irq(&sighand->siglock);
 				goto relock;
 			}
+
+			spin_unlock_irq(&sighand->siglock);
 		}
 
 		signr = dequeue_signal(current, &current->blocked, info);
