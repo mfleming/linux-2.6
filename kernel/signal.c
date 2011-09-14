@@ -161,6 +161,17 @@ void recalc_sigpending(void)
 
 }
 
+static void recalc_sigpending_unlocked(void)
+{
+	spin_lock_irq(&current->siglock);
+	spin_lock(&current->sighand->siglock);
+
+	recalc_sigpending();
+
+	spin_unlock(&current->sighand->siglock);
+	spin_unlock_irq(&current->siglock);
+}
+
 /* Given the mask, find the first available signal that should be serviced. */
 
 #define SYNCHRONOUS_MASK \
@@ -602,25 +613,26 @@ static int __dequeue_signal(struct sigpending *pending, sigset_t *mask,
 	return sig;
 }
 
-/*
- * Dequeue a signal and return the element to the caller, which is
- * expected to free it.
+/**
+ * __dequeue_slowpath - Dequeue a shared pending signal
+ * @tsk:
+ * @mask:
+ * @info
+ *
+ * This function performs all the operations that are required to be
+ * done under the shared siglock.
  */
-int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
+static int __dequeue_slowpath(struct task_struct *tsk, sigset_t *mask,
+			      siginfo_t *info, int signr)
 {
-	int signr;
+	spin_lock_irq(&tsk->sighand->siglock);
 
-	/* We only dequeue private signals from ourselves, we don't let
-	 * signalfd steal them
-	 */
-	spin_lock_irq(&tsk->siglock);
-	signr = __dequeue_signal(&tsk->pending, mask, info);
 	if (!signr) {
-		spin_unlock_irq(&tsk->siglock);
-
-		spin_lock_irq(&tsk->sighand->siglock);
 		signr = __dequeue_signal(&tsk->signal->shared_pending,
 					 mask, info);
+		if (!signr)
+			goto out;
+
 		/*
 		 * itimer signal ?
 		 *
@@ -646,10 +658,6 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 		}
 	}
 
-	recalc_sigpending();
-	if (!signr)
-		goto out;
-
 	if (unlikely(sig_kernel_stop(signr))) {
 		/*
 		 * Set a marker that we have dequeued a stop signal.  Our
@@ -665,19 +673,47 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 		 */
 		current->jobctl |= JOBCTL_STOP_DEQUEUED;
 	}
-	if ((info->si_code & __SI_MASK) == __SI_TIMER && info->si_sys_private) {
-		/*
-		 * Release the siglock to ensure proper locking order
-		 * of timer locks outside of siglocks.  Note, we leave
-		 * irqs disabled here, since the posix-timers code is
-		 * about to disable them again anyway.
-		 */
-		spin_unlock(&tsk->sighand->siglock);
-		do_schedule_next_timer(info);
-		spin_lock(&tsk->sighand->siglock);
-	}
+
 out:
 	spin_unlock_irq(&tsk->sighand->siglock);
+	return signr;
+}
+
+/*
+ * Dequeue a signal and return the element to the caller, which is
+ * expected to free it.
+ */
+int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
+{
+	int signr;
+
+	/* We only dequeue private signals from ourselves, we don't let
+	 * signalfd steal them
+	 */
+	spin_lock_irq(&tsk->siglock);
+	signr = __dequeue_signal(&tsk->pending, mask, info);
+	spin_unlock_irq(&tsk->siglock);
+
+	/*
+	 * If there were no private signals to dequeue or we succeeded
+	 * in dequeueing a private signal but it's a stop signal
+	 * (which requires is to update flags protected by the shared
+	 * siglock) execute the slowpath.
+	 */
+	if (!signr || unlikely(sig_kernel_stop(signr)))
+		signr = __dequeue_slowpath(tsk, mask, info, signr);
+
+	/*
+	 * This would seem like the ideal place to call
+	 * recalc_sigpending(), but because we get here without
+	 * holding either of the siglocks we can't clear/set
+	 * TIF_SIGPENDING.
+	 */
+
+	if (signr && (info->si_code & __SI_MASK) == __SI_TIMER
+	    && info->si_sys_private)
+		do_schedule_next_timer(info);
+
 	return signr;
 }
 
@@ -2257,8 +2293,10 @@ relock:
 			break; /* will return 0 */
 
 		if (unlikely(current->ptrace) && signr != SIGKILL) {
+			spin_lock_irq(&current->sighand->siglock);
 			signr = ptrace_signal(signr, info,
 					      regs, cookie);
+			spin_unlock_irq(&current->sighand->siglock);
 			if (!signr)
 				continue;
 		}
@@ -2321,20 +2359,17 @@ relock:
 			 * We need to check for that and bail out if necessary.
 			 */
 			if (signr != SIGSTOP) {
-				spin_unlock_irq(&sighand->siglock);
-
 				/* signals can be posted during this window */
-
 				if (is_current_pgrp_orphaned())
 					goto relock;
-
-				spin_lock_irq(&sighand->siglock);
 			}
 
+			spin_lock_irq(&sighand->siglock);
 			if (likely(do_signal_stop(info->si_signo))) {
 				/* It released the siglock.  */
 				goto relock;
 			}
+			spin_unlock_irq(&sighand->siglock);
 
 			/*
 			 * We didn't actually stop, due to a race
@@ -2342,8 +2377,6 @@ relock:
 			 */
 			continue;
 		}
-
-		spin_unlock_irq(&sighand->siglock);
 
 		/*
 		 * Anything else is fatal, maybe with a core dump.
@@ -2370,7 +2403,8 @@ relock:
 		do_group_exit(info->si_signo);
 		/* NOTREACHED */
 	}
-	spin_unlock_irq(&sighand->siglock);
+
+	recalc_sigpending_unlocked();
 	return signr;
 }
 
