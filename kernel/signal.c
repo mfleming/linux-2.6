@@ -128,8 +128,6 @@ static inline int has_pending_signals(sigset_t *signal, sigset_t *blocked)
 
 static int recalc_sigpending_tsk(struct task_struct *t)
 {
-	assert_spin_locked(&t->sighand->siglock);
-	assert_spin_locked(&t->siglock);
 	if ((t->jobctl & JOBCTL_PENDING_MASK) ||
 	    PENDING(&t->pending, &t->blocked) ||
 	    PENDING(&t->signal->shared_pending, &t->blocked)) {
@@ -150,26 +148,23 @@ static int recalc_sigpending_tsk(struct task_struct *t)
  */
 void recalc_sigpending_and_wake(struct task_struct *t)
 {
+	write_seqlock(&t->sig_seqlock);
+
 	if (recalc_sigpending_tsk(t))
 		signal_wake_up(t, 0);
+
+	write_sequnlock(&t->sig_seqlock);
 }
 
 void recalc_sigpending(void)
 {
-	if (!recalc_sigpending_tsk(current) && !freezing(current))
-		clear_thread_flag(TIF_SIGPENDING);
+	unsigned seq;
 
-}
-
-static void recalc_sigpending_unlocked(void)
-{
-	spin_lock_irq(&current->siglock);
-	spin_lock(&current->sighand->siglock);
-
-	recalc_sigpending();
-
-	spin_unlock(&current->sighand->siglock);
-	spin_unlock_irq(&current->siglock);
+	seq = read_seqbegin(&current->sig_seqlock);
+	do {
+		if (!recalc_sigpending_tsk(current) && !freezing(current))
+			clear_thread_flag(TIF_SIGPENDING);
+	} while (read_seqretry(&current->sig_seqlock, seq));
 }
 
 /* Given the mask, find the first available signal that should be serviced. */
@@ -703,12 +698,7 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 	if (!signr || unlikely(sig_kernel_stop(signr)))
 		signr = __dequeue_slowpath(tsk, mask, info, signr);
 
-	/*
-	 * This would seem like the ideal place to call
-	 * recalc_sigpending(), but because we get here without
-	 * holding either of the siglocks we can't clear/set
-	 * TIF_SIGPENDING.
-	 */
+	recalc_sigpending();
 
 	if (signr && (info->si_code & __SI_MASK) == __SI_TIMER
 	    && info->si_sys_private)
@@ -732,7 +722,9 @@ void signal_wake_up(struct task_struct *t, int resume)
 {
 	unsigned int mask;
 
+	write_seqlock(&t->sig_seqlock);
 	set_tsk_thread_flag(t, TIF_SIGPENDING);
+	write_sequnlock(&t->sig_seqlock);
 
 	/*
 	 * For SIGKILL, we want to wake it up in the stopped/traced/killable
@@ -1160,8 +1152,10 @@ static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 
 out_set:
 	signalfd_notify(t, sig);
+
 	sigaddset(&pending->signal, sig);
 	complete_signal(sig, t, group);
+
 	return 0;
 }
 
@@ -1853,6 +1847,7 @@ static void ptrace_stop(int exit_code, int why, int clear_code, siginfo_t *info)
 	__acquires(&current->sighand->siglock)
 {
 	bool gstop_done = false;
+	unsigned seq;
 
 	if (arch_ptrace_stop_needed(exit_code, info)) {
 		/*
@@ -1973,7 +1968,10 @@ static void ptrace_stop(int exit_code, int why, int clear_code, siginfo_t *info)
 	 * So check for any that we should take before resuming user mode.
 	 * This sets TIF_SIGPENDING, but never clears it.
 	 */
-	recalc_sigpending_tsk(current);
+	seq = read_seqbegin(&current->sig_seqlock);
+	do {
+		recalc_sigpending_tsk(current);
+	} while (read_seqretry(&current->sig_seqlock, seq));
 }
 
 static void ptrace_do_notify(int signr, int exit_code, int why)
@@ -2404,7 +2402,6 @@ relock:
 		/* NOTREACHED */
 	}
 
-	recalc_sigpending_unlocked();
 	return signr;
 }
 

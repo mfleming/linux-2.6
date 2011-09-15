@@ -1392,6 +1392,13 @@ struct task_struct {
 	struct sighand_struct *sighand;
 
 	/*
+	 * This is used for TIF_SIGPENDING. Any task that sets/clear
+	 * TIF_SIGPEDNING on another tasks must write_seqlock() this,
+	 * but if we're "current" we only need to read-lock it.
+	 */
+	seqlock_t sig_seqlock;
+
+	/*
 	 * sighand_lock is a short-term lock that is used when
 	 * dereferencing our 'sighand' pointer. We can only change
 	 * where 'sighand' points while holding this lock. It also

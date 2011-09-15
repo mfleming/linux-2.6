@@ -1138,6 +1138,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	spin_lock_init(&p->alloc_lock);
 
 	init_sigpending(&p->pending);
+	seqlock_init(&p->sig_seqlock);
 	spin_lock_init(&p->sighand_lock);
 	spin_lock_init(&p->siglock);
 
