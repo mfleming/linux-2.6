@@ -530,8 +530,8 @@ struct signal_struct {
 
 	wait_queue_head_t	wait_chldexit;	/* for wait4() */
 
-	/* current thread group signal load-balancing target: */
-	struct task_struct	*curr_target;
+	/* target tasks for each signal */
+	struct task_struct	*tasks[_NSIG];
 
 	/* shared signal handling: */
 	struct sigpending	shared_pending;

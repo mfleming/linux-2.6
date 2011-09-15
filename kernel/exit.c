@@ -94,6 +94,8 @@ static void __exit_signal(struct task_struct *tsk)
 		tty = sig->tty;
 		sig->tty = NULL;
 	} else {
+		int i;
+
 		/*
 		 * This can only happen if the caller is de_thread().
 		 * FIXME: this is the temporary hack, we should teach
@@ -109,8 +111,11 @@ static void __exit_signal(struct task_struct *tsk)
 		if (sig->notify_count > 0 && !--sig->notify_count)
 			wake_up_process(sig->group_exit_task);
 
-		if (tsk == sig->curr_target)
-			sig->curr_target = next_thread(tsk);
+		for (i = 0; i < _NSIG; i++) {
+			if (sig->tasks[i] == tsk)
+				sig->tasks[i] = NULL;
+		}
+
 		/*
 		 * Accumulate here the counters for all threads but the
 		 * group leader as they die, so they can be added into

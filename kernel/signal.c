@@ -945,34 +945,36 @@ static void complete_signal(int sig, struct task_struct *p, int group)
 
 	/*
 	 * Now find a thread we can wake up to take the signal off the queue.
-	 *
-	 * If the main thread wants the signal, it gets first crack.
-	 * Probably the least surprising to the average bear.
 	 */
-	if (wants_signal(sig, p))
-		t = p;
-	else if (!group || thread_group_empty(p))
-		/*
-		 * There is just one thread and it does not need to be woken.
-		 * It will dequeue unblocked signals before it runs again.
-		 */
-		return;
-	else {
-		/*
-		 * Otherwise try to find a suitable thread.
-		 */
-		t = signal->curr_target;
-		while (!wants_signal(sig, t)) {
-			t = next_thread(t);
-			if (t == signal->curr_target)
-				/*
-				 * No thread needs to be woken.
-				 * Any eligible threads will see
-				 * the signal in the queue soon.
-				 */
-				return;
+	t = signal->tasks[sig];
+	if (!t) {
+		if (wants_signal(sig, p))
+			t = p;
+		else if (!group || thread_group_empty(p))
+			/*
+			 * There is just one thread and it does not
+			 * need to be woken.  It will dequeue
+			 * unblocked signals before it runs again.
+			 */
+			return;
+		else {
+			/*
+			 * Otherwise try to find a suitable thread.
+			 */
+			t = p;
+			while (!wants_signal(sig, t)) {
+				t = next_thread(t);
+				if (t == p)
+					/*
+					 * No thread needs to be woken.
+					 * Any eligible threads will see
+					 * the signal in the queue soon.
+					 */
+					return;
+			}
 		}
-		signal->curr_target = t;
+
+		signal->tasks[sig] = t;
 	}
 
 	/*
@@ -2344,24 +2346,44 @@ static void retarget_shared_pending(struct task_struct *tsk, sigset_t *which)
 {
 	sigset_t retarget;
 	struct task_struct *t;
+	int i;
 
 	sigandsets(&retarget, &tsk->signal->shared_pending.signal, which);
+
+	for (i = 0; i < _NSIG; i++) {
+		/*
+		 * If we're not the current target task for a signal
+		 * then we don't need to retarget it.
+		 */
+		if (tsk->signal->tasks[i] != tsk)
+			sigdelset(&retarget, i);
+	}
+
 	if (sigisemptyset(&retarget))
 		return;
 
 	t = tsk;
 	while_each_thread(tsk, t) {
+		sigset_t move;
+
 		if (t->flags & PF_EXITING)
 			continue;
 
 		if (!has_pending_signals(&retarget, &t->blocked))
 			continue;
+
 		/* Remove the signals this thread can handle. */
+		sigandnsets(&move, &retarget, &t->blocked);
+
+		for (i = 0; i < _NSIG; i++) {
+			if (sigismember(&move, i)) {
+				tsk->signal->tasks[i] = t;
+				if (!signal_pending(t))
+					signal_wake_up(t, 0);
+			}
+		}
+
 		sigandsets(&retarget, &retarget, &t->blocked);
-
-		if (!signal_pending(t))
-			signal_wake_up(t, 0);
-
 		if (sigisemptyset(&retarget))
 			break;
 	}
@@ -2438,12 +2460,21 @@ long do_no_restart_syscall(struct restart_block *param)
 
 static void __set_task_blocked(struct task_struct *tsk, const sigset_t *newset)
 {
+	int i;
+
 	if (signal_pending(tsk) && !thread_group_empty(tsk)) {
 		sigset_t newblocked;
 		/* A set of now blocked but previously unblocked signals. */
 		sigandnsets(&newblocked, newset, &current->blocked);
 		retarget_shared_pending(tsk, &newblocked);
 	}
+
+	for (i = 0; i < _NSIG; i++) {
+		if (sigismember((sigset_t *)newset, i) &&
+		    tsk->signal->tasks[i] == NULL)
+			tsk->signal->tasks[i] = tsk;
+	}
+
 	tsk->blocked = *newset;
 	recalc_sigpending();
 }
