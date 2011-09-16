@@ -2463,7 +2463,7 @@ static void handle_exception(struct fsg_common *common)
 	 */
 	for (;;) {
 		int sig =
-			dequeue_signal_lock(current, &current->blocked, &info);
+			dequeue_signal(current, &current->blocked, &info);
 		if (!sig)
 			break;
 		if (sig != SIGUSR1) {

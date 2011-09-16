@@ -144,7 +144,6 @@ static ssize_t signalfd_dequeue(struct signalfd_ctx *ctx, siginfo_t *info,
 	ssize_t ret;
 	DECLARE_WAITQUEUE(wait, current);
 
-	spin_lock_irq(&current->sighand->siglock);
 	ret = dequeue_signal(current, &ctx->sigmask, info);
 	switch (ret) {
 	case 0:
@@ -152,7 +151,6 @@ static ssize_t signalfd_dequeue(struct signalfd_ctx *ctx, siginfo_t *info,
 			break;
 		ret = -EAGAIN;
 	default:
-		spin_unlock_irq(&current->sighand->siglock);
 		return ret;
 	}
 
@@ -166,11 +164,8 @@ static ssize_t signalfd_dequeue(struct signalfd_ctx *ctx, siginfo_t *info,
 			ret = -ERESTARTSYS;
 			break;
 		}
-		spin_unlock_irq(&current->sighand->siglock);
 		schedule();
-		spin_lock_irq(&current->sighand->siglock);
 	}
-	spin_unlock_irq(&current->sighand->siglock);
 
 	remove_wait_queue(&current->sighand->signalfd_wqh, &wait);
 	__set_current_state(TASK_RUNNING);
