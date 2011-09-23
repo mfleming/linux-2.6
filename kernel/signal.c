@@ -38,6 +38,33 @@
 #include "audit.h"	/* audit_signal_info() */
 
 /*
+ * signal locking rules:
+ *
+ *   - sighand->siglock (spinlock) protects,
+ *
+ *        * the tsk->sighand pointer from being modified, see de_thread() and
+ *          __exit_signal(). If you need to dereference tsk->sighand (for
+ *          example when locking ->siglock) and tsk is not current, you must
+ *          call lock_task_sighand().
+ *
+ *        * most things under tsk->signal
+ *
+ *        * tsk->sighand->action[]
+ *
+ *        * tsk->last_siginfo
+ *        * tsk->group_stop
+ *        * tsk->pending
+ *        * tsk->jobctl
+ *
+ *        * the atomic operation of checking tsk->jobctl, tsk->pending and
+ *          tsk->signal->shared_pending and setting/clearing TIF_SIGPENDING,
+ *          see recalc_sigpending().
+ *
+ *        * tsk->cpu_timers
+ *
+ */
+
+/*
  * SLAB caches for signal bits.
  */
 
