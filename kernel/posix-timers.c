@@ -502,6 +502,8 @@ static void k_itimer_rcu_free(struct rcu_head *head)
 #define IT_ID_NOT_SET	0
 static void release_posix_timer(struct k_itimer *tmr, int it_id_set)
 {
+	int shared;
+
 	if (it_id_set) {
 		unsigned long flags;
 		spin_lock_irqsave(&idr_lock, flags);
@@ -509,7 +511,8 @@ static void release_posix_timer(struct k_itimer *tmr, int it_id_set)
 		spin_unlock_irqrestore(&idr_lock, flags);
 	}
 	put_pid(tmr->it_pid);
-	sigqueue_free(tmr->sigq);
+	shared = !(tmr->it_sigev_notify & SIGEV_THREAD_ID);
+	sigqueue_free(tmr->sigq, shared);
 	call_rcu(&tmr->it.rcu, k_itimer_rcu_free);
 }
 

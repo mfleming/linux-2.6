@@ -2271,17 +2271,20 @@ static void selinux_bprm_committed_creds(struct linux_binprm *bprm)
 		memset(&itimer, 0, sizeof itimer);
 		for (i = 0; i < 3; i++)
 			do_setitimer(i, &itimer, NULL);
-		spin_lock_irq(&current->sighand->siglock);
-		spin_lock(&current->signal->ctrl_lock);
+		spin_lock_irq(&current->signal->ctrl_lock);
 		if (!(current->signal->flags & SIGNAL_GROUP_EXIT)) {
+			spin_lock(&current->siglock);
+			spin_lock(&current->signal->shared_siglock);
 			__flush_signals(current);
+			spin_unlock(&current->signal->shared_siglock);
+			spin_unlock(&current->siglock);
+
 			write_lock(&current->sighand->action_lock);
 			flush_signal_handlers(current, 1);
 			write_unlock(&current->sighand->action_lock);
 			sigemptyset(&current->blocked);
 		}
-		spin_unlock(&current->signal->ctrl_lock);
-		spin_unlock_irq(&current->sighand->siglock);
+		spin_unlock_irq(&current->signal->ctrl_lock);
 	}
 
 	/* Wake up the parent if it is waiting so that it can recheck

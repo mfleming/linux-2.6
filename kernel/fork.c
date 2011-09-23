@@ -992,6 +992,7 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
 	if (clone_flags & CLONE_NEWPID)
 		sig->flags |= SIGNAL_UNKILLABLE;
 	sig->curr_target = tsk;
+	spin_lock_init(&sig->shared_siglock);
 	init_sigpending(&sig->shared_pending);
 	spin_lock_init(&sig->ctrl_lock);
 	INIT_LIST_HEAD(&sig->posix_timers);
@@ -1166,6 +1167,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	p->vfork_done = NULL;
 	spin_lock_init(&p->alloc_lock);
 
+	spin_lock_init(&p->siglock);
 	init_sigpending(&p->pending);
 
 	p->utime = cputime_zero;

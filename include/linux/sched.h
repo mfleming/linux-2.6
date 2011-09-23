@@ -534,6 +534,9 @@ struct signal_struct {
 	/* current thread group signal load-balancing target: */
 	struct task_struct	*curr_target;
 
+	/* protects shared_pending */
+	spinlock_t		shared_siglock;
+
 	/* shared signal handling: */
 	struct sigpending	shared_pending;
 
@@ -1395,6 +1398,7 @@ struct task_struct {
 
 	sigset_t blocked, real_blocked;
 	sigset_t saved_sigmask;	/* restored if set_restore_sigmask() was used */
+	spinlock_t siglock;	/* protects pending */
 	struct sigpending pending;
 
 	unsigned long sas_ss_sp;
@@ -2166,7 +2170,7 @@ extern void force_sig(int, struct task_struct *);
 extern int send_sig(int, struct task_struct *, int);
 extern int zap_other_threads(struct task_struct *p);
 extern struct sigqueue *sigqueue_alloc(void);
-extern void sigqueue_free(struct sigqueue *);
+extern void sigqueue_free(struct sigqueue *, int group);
 extern int send_sigqueue(struct sigqueue *,  struct task_struct *, int group);
 extern int do_sigaction(int, struct k_sigaction *, struct k_sigaction *);
 extern int do_sigaltstack(const stack_t __user *, stack_t __user *, unsigned long);

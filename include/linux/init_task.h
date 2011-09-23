@@ -34,6 +34,7 @@ extern struct fs_struct init_fs;
 	.nr_threads	= 1,						\
 	.wait_chldexit	= __WAIT_QUEUE_HEAD_INITIALIZER(sig.wait_chldexit),\
 	.ctrl_lock	= __SPIN_LOCK_UNLOCKED(sig.ctrl_lock),		\
+	.shared_siglock	= __SPIN_LOCK_UNLOCKED(sig.shared_siglock),	\
 	.shared_pending	= { 						\
 		.list = LIST_HEAD_INIT(sig.shared_pending.list),	\
 		.signal =  {{0}}},					\
@@ -171,6 +172,7 @@ extern struct cred init_cred;
 	.signal		= &init_signals,				\
 	.sighand	= &init_sighand,				\
 	.nsproxy	= &init_nsproxy,				\
+	.siglock	= __SPIN_LOCK_UNLOCKED(tsk.siglock),		\
 	.pending	= {						\
 		.list = LIST_HEAD_INIT(tsk.pending.list),		\
 		.signal = {{0}}},					\

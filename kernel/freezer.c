@@ -40,9 +40,7 @@ void refrigerator(void)
 	save = current->state;
 	pr_debug("%s entered refrigerator\n", current->comm);
 
-	spin_lock_irq(&current->sighand->siglock);
 	recalc_sigpending(); /* We sent fake signal, clean it up */
-	spin_unlock_irq(&current->sighand->siglock);
 
 	/* prevent accounting of that task to load */
 	current->flags |= PF_FREEZING;
@@ -66,9 +64,9 @@ static void fake_signal_wake_up(struct task_struct *p)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&p->sighand->siglock, flags);
+	spin_lock_irqsave(&p->siglock, flags);
 	signal_wake_up(p, 0);
-	spin_unlock_irqrestore(&p->sighand->siglock, flags);
+	spin_unlock_irqrestore(&p->siglock, flags);
 }
 
 /**
@@ -122,14 +120,10 @@ bool freeze_task(struct task_struct *p, bool sig_only)
 
 void cancel_freezing(struct task_struct *p)
 {
-	unsigned long flags;
-
 	if (freezing(p)) {
 		pr_debug("  clean up: %s\n", p->comm);
 		clear_freeze_flag(p);
-		spin_lock_irqsave(&p->sighand->siglock, flags);
 		recalc_sigpending_and_wake(p);
-		spin_unlock_irqrestore(&p->sighand->siglock, flags);
 	}
 }
 

@@ -930,7 +930,6 @@ static void __svc_unregister(const u32 program, const u32 version,
 static void svc_unregister(const struct svc_serv *serv)
 {
 	struct svc_program *progp;
-	unsigned long flags;
 	unsigned int i;
 
 	clear_thread_flag(TIF_SIGPENDING);
@@ -948,9 +947,7 @@ static void svc_unregister(const struct svc_serv *serv)
 		}
 	}
 
-	spin_lock_irqsave(&current->sighand->siglock, flags);
 	recalc_sigpending();
-	spin_unlock_irqrestore(&current->sighand->siglock, flags);
 }
 
 /*

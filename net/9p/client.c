@@ -594,7 +594,6 @@ p9_client_rpc(struct p9_client *c, int8_t type, const char *fmt, ...)
 	va_list ap;
 	int tag, err;
 	struct p9_req_t *req;
-	unsigned long flags;
 	int sigpending;
 
 	P9_DPRINTK(P9_DEBUG_MUX, "client %p op %d\n", c, type);
@@ -664,11 +663,8 @@ p9_client_rpc(struct p9_client *c, int8_t type, const char *fmt, ...)
 			err = 0;
 	}
 
-	if (sigpending) {
-		spin_lock_irqsave(&current->sighand->siglock, flags);
+	if (sigpending)
 		recalc_sigpending();
-		spin_unlock_irqrestore(&current->sighand->siglock, flags);
-	}
 
 	if (err < 0)
 		goto reterr;
