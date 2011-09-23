@@ -993,6 +993,7 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
 		sig->flags |= SIGNAL_UNKILLABLE;
 	sig->curr_target = tsk;
 	init_sigpending(&sig->shared_pending);
+	spin_lock_init(&sig->ctrl_lock);
 	INIT_LIST_HEAD(&sig->posix_timers);
 
 	hrtimer_init(&sig->real_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);

@@ -33,6 +33,7 @@ extern struct fs_struct init_fs;
 #define INIT_SIGNALS(sig) {						\
 	.nr_threads	= 1,						\
 	.wait_chldexit	= __WAIT_QUEUE_HEAD_INITIALIZER(sig.wait_chldexit),\
+	.ctrl_lock	= __SPIN_LOCK_UNLOCKED(sig.ctrl_lock),		\
 	.shared_pending	= { 						\
 		.list = LIST_HEAD_INIT(sig.shared_pending.list),	\
 		.signal =  {{0}}},					\

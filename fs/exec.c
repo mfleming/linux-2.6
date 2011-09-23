@@ -868,7 +868,6 @@ static int de_thread(struct task_struct *tsk)
 {
 	struct signal_struct *sig = tsk->signal;
 	struct sighand_struct *oldsighand = tsk->sighand;
-	spinlock_t *lock = &oldsighand->siglock;
 
 	if (thread_group_empty(tsk))
 		goto no_thread_group;
@@ -876,13 +875,13 @@ static int de_thread(struct task_struct *tsk)
 	/*
 	 * Kill all other threads in the thread group.
 	 */
-	spin_lock_irq(lock);
+	spin_lock_irq(&sig->ctrl_lock);
 	if (signal_group_exit(sig)) {
 		/*
 		 * Another group action in progress, just
 		 * return so that the signal is processed.
 		 */
-		spin_unlock_irq(lock);
+		spin_unlock_irq(&sig->ctrl_lock);
 		return -EAGAIN;
 	}
 
@@ -893,11 +892,11 @@ static int de_thread(struct task_struct *tsk)
 
 	while (sig->notify_count) {
 		__set_current_state(TASK_UNINTERRUPTIBLE);
-		spin_unlock_irq(lock);
+		spin_unlock_irq(&sig->ctrl_lock);
 		schedule();
-		spin_lock_irq(lock);
+		spin_lock_irq(&sig->ctrl_lock);
 	}
-	spin_unlock_irq(lock);
+	spin_unlock_irq(&sig->ctrl_lock);
 
 	/*
 	 * At this point all other threads have exited, all we have to
@@ -1845,12 +1844,12 @@ static inline int zap_threads(struct task_struct *tsk, struct mm_struct *mm,
 	unsigned long flags;
 	int nr = -EAGAIN;
 
-	spin_lock_irq(&tsk->sighand->siglock);
+	spin_lock_irq(&tsk->signal->ctrl_lock);
 	if (!signal_group_exit(tsk->signal)) {
 		mm->core_state = core_state;
 		nr = zap_process(tsk, exit_code);
 	}
-	spin_unlock_irq(&tsk->sighand->siglock);
+	spin_unlock_irq(&tsk->signal->ctrl_lock);
 	if (unlikely(nr < 0))
 		return nr;
 
@@ -1897,7 +1896,9 @@ static inline int zap_threads(struct task_struct *tsk, struct mm_struct *mm,
 			if (p->mm) {
 				if (unlikely(p->mm == mm)) {
 					lock_task_sighand(p, &flags);
+					spin_lock(&p->signal->ctrl_lock);
 					nr += zap_process(p, exit_code);
+					spin_unlock(&p->signal->ctrl_lock);
 					unlock_task_sighand(p, &flags);
 				}
 				break;

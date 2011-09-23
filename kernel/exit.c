@@ -106,8 +106,10 @@ static void __exit_signal(struct task_struct *tsk)
 		 * If there is any task waiting for the group exit
 		 * then notify it:
 		 */
+		spin_lock(&sig->ctrl_lock);
 		if (sig->notify_count > 0 && !--sig->notify_count)
 			wake_up_process(sig->group_exit_task);
+		spin_unlock(&sig->ctrl_lock);
 
 		if (tsk == sig->curr_target)
 			sig->curr_target = next_thread(tsk);
@@ -1086,8 +1088,7 @@ do_group_exit(int exit_code)
 	if (signal_group_exit(sig))
 		exit_code = sig->group_exit_code;
 	else if (!thread_group_empty(current)) {
-		struct sighand_struct *const sighand = current->sighand;
-		spin_lock_irq(&sighand->siglock);
+		spin_lock_irq(&sig->ctrl_lock);
 		if (signal_group_exit(sig))
 			/* Another thread got here before we took the lock.  */
 			exit_code = sig->group_exit_code;
@@ -1096,7 +1097,7 @@ do_group_exit(int exit_code)
 			sig->flags = SIGNAL_GROUP_EXIT;
 			zap_other_threads(current);
 		}
-		spin_unlock_irq(&sighand->siglock);
+		spin_unlock_irq(&sig->ctrl_lock);
 	}
 
 	do_exit(exit_code);
@@ -1381,7 +1382,7 @@ static int *task_stopped_code(struct task_struct *p, bool ptrace)
  *
  * CONTEXT:
  * read_lock(&tasklist_lock), which is released if return value is
- * non-zero.  Also, grabs and releases @p->sighand->siglock.
+ * non-zero.  Also, grabs and releases @p->signal->ctrl_lock.
  *
  * RETURNS:
  * 0 if wait condition didn't exist and search for other wait conditions
@@ -1407,7 +1408,7 @@ static int wait_task_stopped(struct wait_opts *wo,
 		return 0;
 
 	exit_code = 0;
-	spin_lock_irq(&p->sighand->siglock);
+	spin_lock_irq(&p->signal->ctrl_lock);
 
 	p_code = task_stopped_code(p, ptrace);
 	if (unlikely(!p_code))
@@ -1422,7 +1423,7 @@ static int wait_task_stopped(struct wait_opts *wo,
 
 	uid = task_uid(p);
 unlock_sig:
-	spin_unlock_irq(&p->sighand->siglock);
+	spin_unlock_irq(&p->signal->ctrl_lock);
 	if (!exit_code)
 		return 0;
 
@@ -1485,16 +1486,16 @@ static int wait_task_continued(struct wait_opts *wo, struct task_struct *p)
 	if (!(p->signal->flags & SIGNAL_STOP_CONTINUED))
 		return 0;
 
-	spin_lock_irq(&p->sighand->siglock);
+	spin_lock_irq(&p->signal->ctrl_lock);
 	/* Re-check with the lock held.  */
 	if (!(p->signal->flags & SIGNAL_STOP_CONTINUED)) {
-		spin_unlock_irq(&p->sighand->siglock);
+		spin_unlock_irq(&p->signal->ctrl_lock);
 		return 0;
 	}
 	if (!unlikely(wo->wo_flags & WNOWAIT))
 		p->signal->flags &= ~SIGNAL_STOP_CONTINUED;
 	uid = task_uid(p);
-	spin_unlock_irq(&p->sighand->siglock);
+	spin_unlock_irq(&p->signal->ctrl_lock);
 
 	pid = task_pid_vnr(p);
 	get_task_struct(p);

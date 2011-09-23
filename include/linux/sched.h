@@ -537,6 +537,8 @@ struct signal_struct {
 	/* shared signal handling: */
 	struct sigpending	shared_pending;
 
+	spinlock_t		ctrl_lock;
+
 	/* thread group exit support */
 	int			group_exit_code;
 	/* overloaded:
@@ -1293,7 +1295,7 @@ struct task_struct {
 	int exit_state;
 	int exit_code, exit_signal;
 	int pdeath_signal;  /*  The signal sent when the parent dies  */
-	unsigned int jobctl;	/* JOBCTL_*, siglock protected */
+	unsigned int jobctl;	/* JOBCTL_*, ctrl_lock protected */
 	/* ??? */
 	unsigned int personality;
 	unsigned did_exec:1;

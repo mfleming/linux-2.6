@@ -81,7 +81,7 @@ void __ptrace_unlink(struct task_struct *child)
 	child->parent = child->real_parent;
 	list_del_init(&child->ptrace_entry);
 
-	spin_lock(&child->sighand->siglock);
+	spin_lock(&child->signal->ctrl_lock);
 
 	/*
 	 * Clear all pending traps and TRAPPING.  TRAPPING should be
@@ -108,7 +108,7 @@ void __ptrace_unlink(struct task_struct *child)
 	if (child->jobctl & JOBCTL_STOP_PENDING || task_is_traced(child))
 		signal_wake_up(child, task_is_traced(child));
 
-	spin_unlock(&child->sighand->siglock);
+	spin_unlock(&child->signal->ctrl_lock);
 }
 
 /**
@@ -123,7 +123,7 @@ void __ptrace_unlink(struct task_struct *child)
  * state.
  *
  * CONTEXT:
- * Grabs and releases tasklist_lock and @child->sighand->siglock.
+ * Grabs and releases tasklist_lock and @child->signal->ctrl_lock.
  *
  * RETURNS:
  * 0 on success, -ESRCH if %child is not ready.
@@ -141,16 +141,12 @@ int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 	 */
 	read_lock(&tasklist_lock);
 	if ((child->ptrace & PT_PTRACED) && child->parent == current) {
-		/*
-		 * child->sighand can't be NULL, release_task()
-		 * does ptrace_unlink() before __exit_signal().
-		 */
-		spin_lock_irq(&child->sighand->siglock);
+		spin_lock_irq(&child->signal->ctrl_lock);
 		WARN_ON_ONCE(task_is_stopped(child));
 		if (ignore_state || (task_is_traced(child) &&
 				     !(child->jobctl & JOBCTL_LISTENING)))
 			ret = 0;
-		spin_unlock_irq(&child->sighand->siglock);
+		spin_unlock_irq(&child->signal->ctrl_lock);
 	}
 	read_unlock(&tasklist_lock);
 
@@ -275,7 +271,7 @@ static int ptrace_attach(struct task_struct *task, long request,
 	if (!seize)
 		send_sig_info(SIGSTOP, SEND_SIG_FORCED, task);
 
-	spin_lock(&task->sighand->siglock);
+	spin_lock(&task->signal->ctrl_lock);
 
 	/*
 	 * If the task is already STOPPED, set JOBCTL_TRAP_STOP and
@@ -292,13 +288,13 @@ static int ptrace_attach(struct task_struct *task, long request,
 	 * ATTACH, the wait(2) may fail due to the transient RUNNING.
 	 *
 	 * The following task_is_stopped() test is safe as both transitions
-	 * in and out of STOPPED are protected by siglock.
+	 * in and out of STOPPED are protected by ctrl_lock.
 	 */
 	if (task_is_stopped(task) &&
 	    task_set_jobctl_pending(task, JOBCTL_TRAP_STOP | JOBCTL_TRAPPING))
 		signal_wake_up(task, 1);
 
-	spin_unlock(&task->sighand->siglock);
+	spin_unlock(&task->signal->ctrl_lock);
 
 	retval = 0;
 unlock_tasklist:
@@ -538,32 +534,30 @@ static int ptrace_setoptions(struct task_struct *child, unsigned long data)
 static int ptrace_getsiginfo(struct task_struct *child, siginfo_t *info)
 {
 	unsigned long flags;
-	int error = -ESRCH;
+	int error = -EINVAL;
 
-	if (lock_task_sighand(child, &flags)) {
-		error = -EINVAL;
-		if (likely(child->last_siginfo != NULL)) {
-			*info = *child->last_siginfo;
-			error = 0;
-		}
-		unlock_task_sighand(child, &flags);
+	spin_lock_irqsave(&child->signal->ctrl_lock, flags);
+	if (likely(child->last_siginfo != NULL)) {
+		*info = *child->last_siginfo;
+		error = 0;
 	}
+	spin_unlock_irqrestore(&child->signal->ctrl_lock, flags);
+
 	return error;
 }
 
 static int ptrace_setsiginfo(struct task_struct *child, const siginfo_t *info)
 {
 	unsigned long flags;
-	int error = -ESRCH;
+	int error = -EINVAL;
 
-	if (lock_task_sighand(child, &flags)) {
-		error = -EINVAL;
-		if (likely(child->last_siginfo != NULL)) {
-			*child->last_siginfo = *info;
-			error = 0;
-		}
-		unlock_task_sighand(child, &flags);
+	spin_lock_irqsave(&child->signal->ctrl_lock, flags);
+	if (likely(child->last_siginfo != NULL)) {
+		*child->last_siginfo = *info;
+		error = 0;
 	}
+	spin_unlock_irqrestore(&child->signal->ctrl_lock, flags);
+
 	return error;
 }
 
@@ -715,7 +709,7 @@ int ptrace_request(struct task_struct *child, long request,
 		 * The actual trap might not be PTRACE_EVENT_STOP trap but
 		 * the pending condition is cleared regardless.
 		 */
-		if (unlikely(!seized || !lock_task_sighand(child, &flags)))
+		if (unlikely(!seized))
 			break;
 
 		/*
@@ -724,10 +718,11 @@ int ptrace_request(struct task_struct *child, long request,
 		 * STOP, this INTERRUPT should clear LISTEN and re-trap
 		 * tracee into STOP.
 		 */
+		spin_lock_irqsave(&child->signal->ctrl_lock, flags);
 		if (likely(task_set_jobctl_pending(child, JOBCTL_TRAP_STOP)))
 			signal_wake_up(child, child->jobctl & JOBCTL_LISTENING);
 
-		unlock_task_sighand(child, &flags);
+		spin_unlock_irqrestore(&child->signal->ctrl_lock, flags);
 		ret = 0;
 		break;
 
@@ -740,12 +735,15 @@ int ptrace_request(struct task_struct *child, long request,
 		 * again.  Alternatively, ptracer can issue INTERRUPT to
 		 * finish listening and re-trap tracee into STOP.
 		 */
-		if (unlikely(!seized || !lock_task_sighand(child, &flags)))
+		if (unlikely(!seized))
 			break;
 
+		spin_lock_irqsave(&child->signal->ctrl_lock, flags);
 		si = child->last_siginfo;
-		if (unlikely(!si || si->si_code >> 8 != PTRACE_EVENT_STOP))
+		if (unlikely(!si || si->si_code >> 8 != PTRACE_EVENT_STOP)) {
+			spin_unlock_irqrestore(&child->signal->ctrl_lock, flags);
 			break;
+		}
 
 		child->jobctl |= JOBCTL_LISTENING;
 
@@ -756,7 +754,7 @@ int ptrace_request(struct task_struct *child, long request,
 		if (child->jobctl & JOBCTL_TRAP_NOTIFY)
 			signal_wake_up(child, true);
 
-		unlock_task_sighand(child, &flags);
+		spin_unlock_irqrestore(&child->signal->ctrl_lock, flags);
 		ret = 0;
 		break;
 

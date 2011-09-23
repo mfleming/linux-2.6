@@ -2272,6 +2272,7 @@ static void selinux_bprm_committed_creds(struct linux_binprm *bprm)
 		for (i = 0; i < 3; i++)
 			do_setitimer(i, &itimer, NULL);
 		spin_lock_irq(&current->sighand->siglock);
+		spin_lock(&current->signal->ctrl_lock);
 		if (!(current->signal->flags & SIGNAL_GROUP_EXIT)) {
 			__flush_signals(current);
 			write_lock(&current->sighand->action_lock);
@@ -2279,6 +2280,7 @@ static void selinux_bprm_committed_creds(struct linux_binprm *bprm)
 			write_unlock(&current->sighand->action_lock);
 			sigemptyset(&current->blocked);
 		}
+		spin_unlock(&current->signal->ctrl_lock);
 		spin_unlock_irq(&current->sighand->siglock);
 	}
 
